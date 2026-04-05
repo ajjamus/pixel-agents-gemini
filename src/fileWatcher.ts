@@ -866,12 +866,17 @@ export function startStaleExternalAgentCheck(
     for (const [id, agent] of agents) {
       if (!agent.isExternal) continue;
 
-      // Only despawn if the JSONL file has been deleted from disk.
-      // Inactive external agents stay alive so they can resume when
-      // the session continues (e.g., claude --resume).
+      // Only despawn if the session file has been deleted from disk,
+      // OR if it's been inactive for a long time (15 mins).
       try {
-        fs.statSync(agent.jsonlFile);
-        // File still exists — keep the agent alive regardless of mtime
+        const stat = fs.statSync(agent.jsonlFile);
+        if (agent.type === AgentType.GEMINI) {
+          const inactiveTime = now - stat.mtimeMs;
+          if (inactiveTime > 15 * 60 * 1000) {
+            // Inactive for 15 minutes
+            toRemove.push(id);
+          }
+        }
       } catch {
         // File deleted — remove agent
         toRemove.push(id);
