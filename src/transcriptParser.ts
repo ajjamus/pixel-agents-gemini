@@ -561,8 +561,7 @@ function processGeminiRecord(
     if (hasThoughts && !hasContent && agent.activeToolIds.size === 0) {
       webview?.postMessage({ type: 'agentStatus', id: agentId, status: 'active' });
     } else if (hasContent && agent.activeToolIds.size === 0) {
-      agent.isWaiting = true;
-      webview?.postMessage({ type: 'agentStatus', id: agentId, status: 'waiting' });
+      startWaitingTimer(agentId, TEXT_IDLE_DELAY_MS, agents, waitingTimers, webview);
     }
   } else if (record.type === 'user') {
     // New user turn
