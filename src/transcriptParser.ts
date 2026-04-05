@@ -73,8 +73,8 @@ export function processTranscriptLine(
   if (agent.type === AgentType.GEMINI) {
     try {
       const data = JSON.parse(line);
-      if (Array.isArray(data.history)) {
-        const newRecords = data.history.slice(agent.linesProcessed);
+      if (Array.isArray(data.messages)) {
+        const newRecords = data.messages.slice(agent.linesProcessed);
         for (const record of newRecords) {
           processGeminiRecord(agentId, record, agents, waitingTimers, permissionTimers, webview);
           agent.linesProcessed++;
@@ -489,53 +489,61 @@ function processGeminiRecord(
   const agent = agents.get(agentId);
   if (!agent) return;
 
-  if (record.role === 'model' || record.role === 'assistant') {
-    // Check for tool calls
-    const calls = record.parts?.filter((p: any) => p.call);
-    if (calls && calls.length > 0) {
-      cancelWaitingTimer(agentId, waitingTimers);
-      agent.isWaiting = false;
+  if (record.type === 'gemini') {
+    // Model response
+    cancelWaitingTimer(agentId, waitingTimers);
+    agent.isWaiting = false;
+    webview?.postMessage({ type: 'agentStatus', id: agentId, status: 'active' });
+
+    // Handle tool calls
+    if (Array.isArray(record.toolCalls)) {
+      for (const call of record.toolCalls) {
+        const toolId = call.id;
+        const toolName = call.name;
+        const isDone = call.status === 'success' || !!call.result;
+
+        if (!isDone) {
+          // Tool is starting or active
+          if (!agent.activeToolIds.has(toolId)) {
+            const status = call.args?.description || formatToolStatus(toolName, call.args || {});
+            agent.activeToolIds.add(toolId);
+            agent.activeToolStatuses.set(toolId, status);
+            agent.activeToolNames.set(toolId, toolName);
+            webview?.postMessage({
+              type: 'agentToolStart',
+              id: agentId,
+              toolId,
+              status,
+              toolName,
+            });
+          }
+        } else {
+          // Tool is done
+          if (agent.activeToolIds.has(toolId)) {
+            agent.activeToolIds.delete(toolId);
+            agent.activeToolStatuses.delete(toolId);
+            agent.activeToolNames.delete(toolId);
+            webview?.postMessage({
+              type: 'agentToolDone',
+              id: agentId,
+              toolId,
+            });
+          }
+        }
+      }
+    }
+
+    // Check if there are thoughts but no content yet (model is thinking)
+    const hasThoughts = Array.isArray(record.thoughts) && record.thoughts.length > 0;
+    const hasContent = !!record.content;
+    if (hasThoughts && !hasContent && agent.activeToolIds.size === 0) {
       webview?.postMessage({ type: 'agentStatus', id: agentId, status: 'active' });
-      for (const p of calls) {
-        const toolName = p.call.name.split(':').pop() || '';
-        const status = p.call.args?.description || formatToolStatus(toolName, p.call.args || {});
-        const toolId = p.call.name;
-        agent.activeToolIds.add(toolId);
-        agent.activeToolStatuses.set(toolId, status);
-        agent.activeToolNames.set(toolId, toolName);
-        webview?.postMessage({
-          type: 'agentToolStart',
-          id: agentId,
-          toolId,
-          status,
-          toolName,
-        });
-      }
-    } else {
-      // It's a text-only response from the model or a thought block
-      const hasThought = record.parts?.some((p: any) => p.thought);
-      if (hasThought) {
-        webview?.postMessage({ type: 'agentStatus', id: agentId, status: 'active' });
-      } else {
-        agent.isWaiting = true;
-        webview?.postMessage({ type: 'agentStatus', id: agentId, status: 'waiting' });
-      }
+    } else if (hasContent && agent.activeToolIds.size === 0) {
+      agent.isWaiting = true;
+      webview?.postMessage({ type: 'agentStatus', id: agentId, status: 'waiting' });
     }
-  } else if (record.role === 'tool') {
-    // Tool completed
-    const toolId = record.name;
-    if (agent.activeToolIds.has(toolId)) {
-      agent.activeToolIds.delete(toolId);
-      agent.activeToolStatuses.delete(toolId);
-      agent.activeToolNames.delete(toolId);
-      webview?.postMessage({
-        type: 'agentToolDone',
-        id: agentId,
-        toolId,
-      });
-    }
-  } else if (record.role === 'user') {
-    // New turn
+  } else if (record.type === 'user') {
+    // New user turn
     cancelWaitingTimer(agentId, waitingTimers);
     clearAgentActivity(agent, agentId, permissionTimers, webview);
     agent.isWaiting = false;

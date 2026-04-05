@@ -793,12 +793,15 @@ function scanGlobalProjectDirs(
     // Skip directories already tracked by workspace scanning
     if (trackedProjectDirs.has(dirPath)) continue;
 
+    const searchPath = type === AgentType.GEMINI ? path.join(dirPath, 'chats') : dirPath;
+    if (!fs.existsSync(searchPath)) continue;
+
     let files: string[];
     try {
       files = fs
-        .readdirSync(dirPath)
+        .readdirSync(searchPath)
         .filter((f) => f.endsWith('.jsonl') || (f.endsWith('.json') && f.startsWith('session-')))
-        .map((f) => path.join(dirPath, f));
+        .map((f) => path.join(searchPath, f));
     } catch {
       continue;
     }
