@@ -455,6 +455,7 @@ function adoptTerminalForFile(
     hadToolsInTurn: false,
     lastDataAt: 0,
     linesProcessed: 0,
+    createdAt: Date.now(),
     seenUnknownRecordTypes: new Set(),
     hookDelivered: false,
   };
@@ -529,6 +530,7 @@ function adoptExternalSession(
     hookDelivered: false,
     lastDataAt: Date.now(),
     linesProcessed: 0,
+    createdAt: Date.now(),
     seenUnknownRecordTypes: new Set(),
     folderName,
   };
