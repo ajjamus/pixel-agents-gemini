@@ -23,33 +23,48 @@ function formatToolStatus(toolName: string, input: Record<string, unknown>): str
   const base = (p: unknown) => (typeof p === 'string' ? path.basename(p) : '');
   switch (toolName) {
     case 'Read':
+    case 'read_file':
       return `Reading ${base(input.file_path)}`;
     case 'Edit':
+    case 'replace':
       return `Editing ${base(input.file_path)}`;
     case 'Write':
+    case 'write_file':
       return `Writing ${base(input.file_path)}`;
-    case 'Bash': {
+    case 'Bash':
+    case 'run_shell_command': {
       const cmd = (input.command as string) || '';
       return `Running: ${cmd.length > BASH_COMMAND_DISPLAY_MAX_LENGTH ? cmd.slice(0, BASH_COMMAND_DISPLAY_MAX_LENGTH) + '\u2026' : cmd}`;
     }
     case 'Glob':
+    case 'glob':
       return 'Searching files';
     case 'Grep':
+    case 'grep_search':
       return 'Searching code';
     case 'WebFetch':
+    case 'web_fetch':
       return 'Fetching web content';
     case 'WebSearch':
+    case 'google_web_search':
       return 'Searching the web';
     case 'Task':
-    case 'Agent': {
-      const desc = typeof input.description === 'string' ? input.description : '';
+    case 'Agent':
+    case 'codebase_investigator':
+    case 'generalist': {
+      const desc =
+        typeof input.description === 'string'
+          ? input.description
+          : (input.objective as string) || '';
       return desc
         ? `Subtask: ${desc.length > TASK_DESCRIPTION_DISPLAY_MAX_LENGTH ? desc.slice(0, TASK_DESCRIPTION_DISPLAY_MAX_LENGTH) + '\u2026' : desc}`
         : 'Running subtask';
     }
     case 'AskUserQuestion':
+    case 'ask_user':
       return 'Waiting for your answer';
     case 'EnterPlanMode':
+    case 'enter_plan_mode':
       return 'Planning';
     case 'NotebookEdit':
       return `Editing notebook`;
@@ -74,8 +89,15 @@ export function processTranscriptLine(
     try {
       const data = JSON.parse(line);
       if (Array.isArray(data.messages)) {
-        const newRecords = data.messages.slice(agent.linesProcessed);
-        for (const record of newRecords) {
+        // For Gemini, we always process from the last known message minus one
+        // to catch updates to the active message (tools finishing, content appearing)
+        const startIndex = Math.max(0, agent.linesProcessed - 1);
+        const recordsToProcess = data.messages.slice(startIndex);
+
+        // Reset processed count to before the slice
+        agent.linesProcessed = startIndex;
+
+        for (const record of recordsToProcess) {
           processGeminiRecord(agentId, record, agents, waitingTimers, permissionTimers, webview);
           agent.linesProcessed++;
         }
