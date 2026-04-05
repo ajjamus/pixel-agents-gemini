@@ -10,8 +10,6 @@ import {
   EXTERNAL_SCAN_INTERVAL_MS,
   EXTERNAL_STALE_CHECK_INTERVAL_MS,
   FILE_WATCHER_POLL_INTERVAL_MS,
-  GLOBAL_SCAN_ACTIVE_MAX_AGE_MS,
-  GLOBAL_SCAN_ACTIVE_MIN_SIZE,
   PROJECT_SCAN_INTERVAL_MS,
 } from '../server/src/constants.js';
 import { removeAgent } from './agentManager.js';
