@@ -862,6 +862,7 @@ export function startStaleExternalAgentCheck(
 ): ReturnType<typeof setInterval> {
   return setInterval(() => {
     const toRemove: number[] = [];
+    const now = Date.now();
 
     for (const [id, agent] of agents) {
       if (!agent.isExternal) continue;
