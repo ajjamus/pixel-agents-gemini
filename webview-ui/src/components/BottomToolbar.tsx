@@ -47,11 +47,11 @@ export function BottomToolbar({
   const handleAgentClick = () => {
     setIsBypassMenuOpen(false);
     pendingBypassRef.current = false;
-    pendingTypeRef.current = 'claude';
+    pendingTypeRef.current = 'gemini';
     if (hasMultipleFolders) {
       setIsFolderPickerOpen((v) => !v);
     } else {
-      onOpenClaude();
+      onOpenGemini();
     }
   };
 
@@ -88,17 +88,6 @@ export function BottomToolbar({
     }
   };
 
-  const handleGeminiSelect = () => {
-    setIsBypassMenuOpen(false);
-    pendingTypeRef.current = 'gemini';
-    pendingBypassRef.current = false;
-    if (hasMultipleFolders) {
-      setIsFolderPickerOpen(true);
-    } else {
-      onOpenGemini();
-    }
-  };
-
   return (
     <div className="absolute bottom-10 left-10 z-20 flex items-center gap-4 pixel-panel p-4">
       <div
@@ -116,10 +105,23 @@ export function BottomToolbar({
               : 'bg-accent hover:bg-accent-bright'
           }
         >
-          + Agent
+          + Gemini Agent ✨
         </Button>
         <Dropdown isOpen={isBypassMenuOpen}>
-          <DropdownItem onClick={handleGeminiSelect}>New Gemini Agent ✨</DropdownItem>
+          <DropdownItem
+            onClick={() => {
+              setIsBypassMenuOpen(false);
+              pendingTypeRef.current = 'claude';
+              pendingBypassRef.current = false;
+              if (hasMultipleFolders) {
+                setIsFolderPickerOpen(true);
+              } else {
+                onOpenClaude();
+              }
+            }}
+          >
+            New Claude Agent
+          </DropdownItem>
           <DropdownItem onClick={() => handleBypassSelect(true)}>
             Claude: Skip permissions mode <span className="text-2xs text-warning">⚠</span>
           </DropdownItem>

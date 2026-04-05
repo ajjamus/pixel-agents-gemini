@@ -799,7 +799,7 @@ function scanGlobalProjectDirs(
     try {
       files = fs
         .readdirSync(dirPath)
-        .filter((f) => f.endsWith('.jsonl'))
+        .filter((f) => f.endsWith('.jsonl') || (f.endsWith('.json') && f.startsWith('session-')))
         .map((f) => path.join(dirPath, f));
     } catch {
       continue;
@@ -815,11 +815,11 @@ function scanGlobalProjectDirs(
         }
       }
       if (tracked) continue;
-      // Activity filter: >3KB AND modified within 10 minutes
+      // Activity filter for global scan: >100 bytes AND modified within 30 minutes
       try {
         const stat = fs.statSync(file);
-        if (stat.size < GLOBAL_SCAN_ACTIVE_MIN_SIZE) continue;
-        if (now - stat.mtimeMs > GLOBAL_SCAN_ACTIVE_MAX_AGE_MS) continue;
+        if (stat.size < 100) continue;
+        if (now - stat.mtimeMs > 30 * 60 * 1000) continue;
       } catch {
         continue;
       }

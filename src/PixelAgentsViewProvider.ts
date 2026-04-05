@@ -321,7 +321,7 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
           (this.context.extension.packageJSON as { version?: string }).version ?? '';
         const watchAllSessions = this.context.globalState.get<boolean>(
           GLOBAL_KEY_WATCH_ALL_SESSIONS,
-          false,
+          true,
         );
         const alwaysShowLabels = this.context.globalState.get<boolean>(
           GLOBAL_KEY_ALWAYS_SHOW_LABELS,
