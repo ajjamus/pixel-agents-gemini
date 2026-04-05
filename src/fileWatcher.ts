@@ -15,7 +15,7 @@ import {
   PROJECT_SCAN_INTERVAL_MS,
 } from '../server/src/constants.js';
 import { removeAgent } from './agentManager.js';
-import { TERMINAL_NAME_PREFIX } from './constants.js';
+import { AgentType, GEMINI_PROJECTS_ROOT, TERMINAL_NAME_PREFIX } from './constants.js';
 import { cancelPermissionTimer, cancelWaitingTimer, clearAgentActivity } from './timerManager.js';
 import { processTranscriptLine } from './transcriptParser.js';
 import type { AgentState } from './types.js';
@@ -155,7 +155,19 @@ export function readNewLines(
   if (!agent) return;
   try {
     const stat = fs.statSync(agent.jsonlFile);
-    if (stat.size <= agent.fileOffset) return;
+    if (stat.size < agent.fileOffset) {
+      // File was truncated/overwritten (Gemini behavior)
+      agent.fileOffset = 0;
+    }
+    if (stat.size === agent.fileOffset) return;
+
+    if (agent.type === AgentType.GEMINI) {
+      // For Gemini, we read the whole file as it's a single JSON object
+      const content = fs.readFileSync(agent.jsonlFile, 'utf8');
+      agent.fileOffset = stat.size;
+      processTranscriptLine(agentId, content, agents, waitingTimers, permissionTimers, webview);
+      return;
+    }
 
     // Cap single read at 64KB to prevent blocking on massive JSONL dumps.
     // Remaining data will be picked up on the next poll cycle.
@@ -303,7 +315,7 @@ function scanForNewJsonlFiles(
   try {
     files = fs
       .readdirSync(projectDir)
-      .filter((f) => f.endsWith('.jsonl'))
+      .filter((f) => f.endsWith('.jsonl') || (f.endsWith('.json') && f.startsWith('session-')))
       .map((f) => path.join(projectDir, f));
   } catch {
     return;
@@ -419,9 +431,12 @@ function adoptTerminalForFile(
   onAgentCreated?: (agent: AgentState) => void,
 ): void {
   const id = nextAgentIdRef.current++;
-  const sessionId = path.basename(jsonlFile, '.jsonl');
+  const isGemini = jsonlFile.endsWith('.json');
+  const type = isGemini ? AgentType.GEMINI : AgentType.CLAUDE;
+  const sessionId = path.basename(jsonlFile).replace(/\.(jsonl|json)$/, '');
   const agent: AgentState = {
     id,
+    type,
     sessionId,
     terminalRef: terminal,
     isExternal: false,
@@ -481,6 +496,7 @@ function adoptExternalSession(
   webview: vscode.Webview | undefined,
   persistAgents: () => void,
   folderName?: string,
+  type: AgentType = AgentType.CLAUDE,
 ): void {
   const id = nextAgentIdRef.current++;
   // Skip to end of file -- only show live activity going forward, not replay history
@@ -493,7 +509,8 @@ function adoptExternalSession(
   }
   const agent: AgentState = {
     id,
-    sessionId: path.basename(jsonlFile, '.jsonl'),
+    type,
+    sessionId: path.basename(jsonlFile).replace(/\.(jsonl|json)$/, ''),
     terminalRef: undefined,
     isExternal: true,
     projectDir,
@@ -574,6 +591,21 @@ export function startExternalSessionScanning(
     // If "Watch All Sessions" is ON, also scan all global project dirs
     if (watchAllSessionsRef?.current) {
       scanGlobalProjectDirs(
+        path.join(os.homedir(), '.claude', 'projects'),
+        AgentType.CLAUDE,
+        knownJsonlFiles,
+        nextAgentIdRef,
+        agents,
+        fileWatchers,
+        pollingTimers,
+        waitingTimers,
+        permissionTimers,
+        webview,
+        persistAgents,
+      );
+      scanGlobalProjectDirs(
+        path.join(os.homedir(), GEMINI_PROJECTS_ROOT),
+        AgentType.GEMINI,
         knownJsonlFiles,
         nextAgentIdRef,
         agents,
@@ -601,11 +633,12 @@ function scanExternalDir(
   webview: vscode.Webview | undefined,
   persistAgents: () => void,
 ): void {
+  const type = projectDir.includes('.gemini') ? AgentType.GEMINI : AgentType.CLAUDE;
   let files: string[];
   try {
     files = fs
       .readdirSync(projectDir)
-      .filter((f) => f.endsWith('.jsonl'))
+      .filter((f) => f.endsWith('.jsonl') || (f.endsWith('.json') && f.startsWith('session-')))
       .map((f) => path.join(projectDir, f));
   } catch {
     return;
@@ -650,6 +683,8 @@ function scanExternalDir(
         permissionTimers,
         webview,
         persistAgents,
+        undefined,
+        type,
       );
       continue;
     }
@@ -719,6 +754,8 @@ function scanExternalDir(
       permissionTimers,
       webview,
       persistAgents,
+      undefined,
+      type,
     );
   }
 }
@@ -731,6 +768,8 @@ function folderNameFromProjectDir(dirName: string): string {
 
 /** Scan ALL ~/.claude/projects/ directories for active sessions (global discovery). */
 function scanGlobalProjectDirs(
+  projectsRoot: string,
+  type: AgentType,
   knownJsonlFiles: Set<string>,
   nextAgentIdRef: { current: number },
   agents: Map<number, AgentState>,
@@ -741,7 +780,6 @@ function scanGlobalProjectDirs(
   webview: vscode.Webview | undefined,
   persistAgents: () => void,
 ): void {
-  const projectsRoot = path.join(os.homedir(), '.claude', 'projects');
   let dirs: fs.Dirent[];
   try {
     dirs = fs.readdirSync(projectsRoot, { withFileTypes: true }).filter((d) => d.isDirectory());
@@ -798,6 +836,7 @@ function scanGlobalProjectDirs(
         webview,
         persistAgents,
         folderName,
+        type,
       );
     }
   }

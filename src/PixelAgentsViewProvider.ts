@@ -37,6 +37,7 @@ import {
   sendWallTilesToWebview,
 } from './assetLoader.js';
 import { readConfig, writeConfig } from './configPersistence.js';
+import { AgentType } from './constants.js';
 import {
   GLOBAL_KEY_ALWAYS_SHOW_LABELS,
   GLOBAL_KEY_HOOKS_ENABLED,
@@ -163,7 +164,8 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
     webviewView.webview.html = getWebviewContent(webviewView.webview, this.extensionUri);
 
     webviewView.webview.onDidReceiveMessage(async (message) => {
-      if (message.type === 'openClaude') {
+      if (message.type === 'openClaude' || message.type === 'openGemini') {
+        const type = message.type === 'openGemini' ? AgentType.GEMINI : AgentType.CLAUDE;
         const prevAgentIds = new Set(this.agents.keys());
         await launchNewTerminal(
           this.nextAgentId,
@@ -179,6 +181,7 @@ export class PixelAgentsViewProvider implements vscode.WebviewViewProvider {
           this.projectScanTimer,
           this.webview,
           this.persistAgents,
+          type,
           message.folderPath as string | undefined,
           message.bypassPermissions as boolean | undefined,
         );

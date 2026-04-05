@@ -21,3 +21,10 @@ export const WORKSPACE_KEY_AGENTS = 'pixel-agents.agents';
 export const WORKSPACE_KEY_AGENT_SEATS = 'pixel-agents.agentSeats';
 export const WORKSPACE_KEY_LAYOUT = 'pixel-agents.layout';
 export const TERMINAL_NAME_PREFIX = 'Claude Code';
+export const TERMINAL_NAME_GEMINI_PREFIX = 'Gemini CLI';
+export const GEMINI_PROJECTS_ROOT = '.gemini/tmp';
+
+export enum AgentType {
+  CLAUDE = 'claude',
+  GEMINI = 'gemini',
+}

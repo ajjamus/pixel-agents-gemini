@@ -1,7 +1,10 @@
 import type * as vscode from 'vscode';
 
+import { AgentType } from './constants.js';
+
 export interface AgentState {
   id: number;
+  type: AgentType;
   sessionId: string;
   /** Terminal reference — undefined for extension panel sessions */
   terminalRef?: vscode.Terminal;
@@ -26,6 +29,8 @@ export interface AgentState {
   lastDataAt: number;
   /** Total JSONL lines processed for this agent */
   linesProcessed: number;
+  /** Timestamp of agent creation (ms since epoch) */
+  createdAt: number;
   /** Set of record.type values we've already warned about (prevents log spam) */
   seenUnknownRecordTypes: Set<string>;
   /** Whether a hook event has been delivered for this agent (suppresses heuristic timers) */
@@ -34,6 +39,7 @@ export interface AgentState {
 
 export interface PersistedAgent {
   id: number;
+  type?: AgentType;
   sessionId?: string;
   /** Terminal name — empty string for extension panel sessions */
   terminalName: string;
@@ -43,4 +49,6 @@ export interface PersistedAgent {
   projectDir: string;
   /** Workspace folder name (only set for multi-root workspaces) */
   folderName?: string;
+  /** Timestamp of agent creation (ms since epoch) */
+  createdAt?: number;
 }

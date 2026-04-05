@@ -5,6 +5,8 @@ import * as vscode from 'vscode';
 
 import { JSONL_POLL_INTERVAL_MS } from '../server/src/constants.js';
 import {
+  AgentType,
+  TERMINAL_NAME_GEMINI_PREFIX,
   TERMINAL_NAME_PREFIX,
   WORKSPACE_KEY_AGENT_SEATS,
   WORKSPACE_KEY_AGENTS,
@@ -14,16 +16,42 @@ import { migrateAndLoadLayout } from './layoutPersistence.js';
 import { cancelPermissionTimer, cancelWaitingTimer } from './timerManager.js';
 import type { AgentState, PersistedAgent } from './types.js';
 
-export function getProjectDirPath(cwd?: string): string {
+export function getProjectDirPath(cwd?: string, type: AgentType = AgentType.CLAUDE): string {
   // Fall back to home directory when no workspace folder is open.
   // This is the common case on Linux/macOS when VS Code is launched without a folder
   // (e.g. `code` with no arguments). Claude Code writes JSONL files to
   // ~/.claude/projects/<hash>/ where <hash> is derived from the process cwd, so we
   // must use the same directory as the terminal's working directory.
   const workspacePath = cwd || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || os.homedir();
+
+  if (type === AgentType.GEMINI) {
+    const projectsFile = path.join(os.homedir(), '.gemini', 'projects.json');
+    let projectName: string | undefined;
+    if (fs.existsSync(projectsFile)) {
+      try {
+        const projectsData = JSON.parse(fs.readFileSync(projectsFile, 'utf8'));
+        projectName = projectsData.projects[workspacePath];
+        if (!projectName) {
+          // Fallback to name-based match
+          const name = path.basename(workspacePath);
+          projectName = Object.values(projectsData.projects).find((p) => p === name) as
+            | string
+            | undefined;
+        }
+      } catch {
+        /* ignore parse errors */
+      }
+    }
+    // Gemini sessions are stored in ~/.gemini/tmp/<projectName>/chats/
+    const name = projectName || path.basename(workspacePath);
+    const projectDir = path.join(os.homedir(), '.gemini', 'tmp', name, 'chats');
+    console.log(`[Pixel Agents] Gemini project dir: ${workspacePath} → ${projectDir}`);
+    return projectDir;
+  }
+
   const dirName = workspacePath.replace(/[^a-zA-Z0-9-]/g, '-');
   const projectDir = path.join(os.homedir(), '.claude', 'projects', dirName);
-  console.log(`[Pixel Agents] Project dir: ${workspacePath} → ${dirName}`);
+  console.log(`[Pixel Agents] Claude project dir: ${workspacePath} → ${dirName}`);
 
   // Verify the directory exists; if not, try fuzzy matching against existing dirs
   if (!fs.existsSync(projectDir)) {
@@ -69,6 +97,7 @@ export async function launchNewTerminal(
   projectScanTimerRef: { current: ReturnType<typeof setInterval> | null },
   webview: vscode.Webview | undefined,
   persistAgents: () => void,
+  type: AgentType = AgentType.CLAUDE,
   folderPath?: string,
   bypassPermissions?: boolean,
 ): Promise<void> {
@@ -79,29 +108,44 @@ export async function launchNewTerminal(
   const cwd = folderPath || folders?.[0]?.uri.fsPath || os.homedir();
   const isMultiRoot = !!(folders && folders.length > 1);
   const idx = nextTerminalIndexRef.current++;
+  const terminalNamePrefix =
+    type === AgentType.GEMINI ? TERMINAL_NAME_GEMINI_PREFIX : TERMINAL_NAME_PREFIX;
   const terminal = vscode.window.createTerminal({
-    name: `${TERMINAL_NAME_PREFIX} #${idx}`,
+    name: `${terminalNamePrefix} #${idx}`,
     cwd,
   });
   terminal.show();
 
   const sessionId = crypto.randomUUID();
-  const claudeCmd = bypassPermissions
-    ? `claude --session-id ${sessionId} --dangerously-skip-permissions`
-    : `claude --session-id ${sessionId}`;
-  terminal.sendText(claudeCmd);
+  if (type === AgentType.GEMINI) {
+    // Use full path to gemini on macOS if it exists
+    const geminiPath = fs.existsSync('/opt/homebrew/bin/gemini')
+      ? '/opt/homebrew/bin/gemini'
+      : 'gemini';
+    terminal.sendText(geminiPath);
+  } else {
+    const claudeCmd = bypassPermissions
+      ? `claude --session-id ${sessionId} --dangerously-skip-permissions`
+      : `claude --session-id ${sessionId}`;
+    terminal.sendText(claudeCmd);
+  }
 
-  const projectDir = getProjectDirPath(cwd);
+  const projectDir = getProjectDirPath(cwd, type);
 
   // Pre-register expected JSONL file so project scan won't treat it as a /clear file
-  const expectedFile = path.join(projectDir, `${sessionId}.jsonl`);
-  knownJsonlFiles.add(expectedFile);
+  const expectedFileSuffix = type === AgentType.GEMINI ? '.json' : '.jsonl';
+  const expectedFile =
+    type === AgentType.GEMINI ? '' : path.join(projectDir, `${sessionId}${expectedFileSuffix}`);
+  if (expectedFile) {
+    knownJsonlFiles.add(expectedFile);
+  }
 
   // Create agent immediately (before JSONL file exists)
   const id = nextAgentIdRef.current++;
   const folderName = isMultiRoot && cwd ? path.basename(cwd) : undefined;
   const agent: AgentState = {
     id,
+    type,
     sessionId,
     terminalRef: terminal,
     isExternal: false,
@@ -120,6 +164,7 @@ export async function launchNewTerminal(
     hadToolsInTurn: false,
     lastDataAt: 0,
     linesProcessed: 0,
+    createdAt: Date.now(),
     seenUnknownRecordTypes: new Set(),
     folderName,
     hookDelivered: false,
@@ -146,15 +191,32 @@ export async function launchNewTerminal(
     persistAgents,
   );
 
-  // Poll for the specific JSONL file to appear
+  // Poll for the session file to appear
   let pollCount = 0;
-  console.log(`[Pixel Agents] Agent ${id}: waiting for JSONL at ${agent.jsonlFile}`);
   const pollTimer = setInterval(() => {
     pollCount++;
     try {
-      if (fs.existsSync(agent.jsonlFile)) {
+      if (type === AgentType.GEMINI && !agent.jsonlFile) {
+        // Find the newest JSON file in the projectDir that was created just now
+        if (fs.existsSync(projectDir)) {
+          const files = fs
+            .readdirSync(projectDir)
+            .filter((f) => f.endsWith('.json') && f.startsWith('session-'))
+            .map((f) => ({ name: f, time: fs.statSync(path.join(projectDir, f)).mtime.getTime() }))
+            .sort((a, b) => b.time - a.time);
+          if (files.length > 0 && Date.now() - files[0].time < 30000) {
+            agent.jsonlFile = path.join(projectDir, files[0].name);
+            knownJsonlFiles.add(agent.jsonlFile);
+            console.log(
+              `[Pixel Agents] Agent ${id}: matched newest Gemini session ${files[0].name}`,
+            );
+          }
+        }
+      }
+
+      if (agent.jsonlFile && fs.existsSync(agent.jsonlFile)) {
         console.log(
-          `[Pixel Agents] Agent ${id}: found JSONL file ${path.basename(agent.jsonlFile)} (after ${pollCount}s)`,
+          `[Pixel Agents] Agent ${id}: found session file ${path.basename(agent.jsonlFile)} (after ${pollCount}s)`,
         );
         clearInterval(pollTimer);
         jsonlPollTimers.delete(id);
@@ -169,27 +231,9 @@ export async function launchNewTerminal(
           webview,
         );
         readNewLines(id, agents, waitingTimers, permissionTimers, webview);
-      } else if (pollCount === 10) {
-        // After 10s of polling, warn with path details to help diagnose path encoding mismatches
-        const dirExists = fs.existsSync(projectDir);
-        let dirContents = '';
-        if (dirExists) {
-          try {
-            const files = fs.readdirSync(projectDir).filter((f) => f.endsWith('.jsonl'));
-            dirContents =
-              files.length > 0
-                ? `Dir has ${files.length} JSONL file(s): ${files.slice(0, 3).join(', ')}${files.length > 3 ? '...' : ''}`
-                : 'Dir exists but has no JSONL files';
-          } catch {
-            dirContents = 'Dir exists but unreadable';
-          }
-        } else {
-          dirContents = 'Dir does not exist';
-        }
-        console.warn(
-          `[Pixel Agents] Agent ${id}: JSONL file not found after 10s. ` +
-            `Expected: ${agent.jsonlFile}. ${dirContents}`,
-        );
+      } else if (pollCount === 15) {
+        // Increase poll count for Gemini which might take longer
+        console.warn(`[Pixel Agents] Agent ${id}: session file not found after 15s.`);
       }
     } catch {
       /* file may not exist yet */
@@ -244,12 +288,14 @@ export function persistAgents(
   for (const agent of agents.values()) {
     persisted.push({
       id: agent.id,
+      type: agent.type,
       sessionId: agent.sessionId,
       terminalName: agent.terminalRef?.name ?? '',
       isExternal: agent.isExternal || undefined,
       jsonlFile: agent.jsonlFile,
       projectDir: agent.projectDir,
       folderName: agent.folderName,
+      createdAt: agent.createdAt,
     });
   }
   context.workspaceState.update(WORKSPACE_KEY_AGENTS, persisted);
@@ -305,7 +351,8 @@ export function restoreAgents(
 
     const agent: AgentState = {
       id: p.id,
-      sessionId: p.sessionId || path.basename(p.jsonlFile, '.jsonl'),
+      type: p.type ?? AgentType.CLAUDE,
+      sessionId: p.sessionId || path.basename(p.jsonlFile).replace(/\.(jsonl|json)$/, ''),
       terminalRef: terminal,
       isExternal,
       projectDir: p.projectDir,
@@ -323,6 +370,7 @@ export function restoreAgents(
       hadToolsInTurn: false,
       lastDataAt: 0,
       linesProcessed: 0,
+      createdAt: p.createdAt || Date.now(),
       seenUnknownRecordTypes: new Set(),
       folderName: p.folderName,
       hookDelivered: false,
@@ -396,14 +444,24 @@ export function restoreAgents(
   // After a short delay, remove restored terminal agents that never received data.
   // These are dead terminals restored by VS Code (e.g., after /clear or restart)
   // where Claude is no longer running.
-  const restoredTerminalIds = [...agents.entries()]
-    .filter(([, a]) => !a.isExternal && a.terminalRef)
-    .map(([id]) => id);
-  if (restoredTerminalIds.length > 0) {
+  const restoredIdsForCleanup = new Set<number>();
+  for (const p of persisted) {
+    if (agents.has(p.id) && !agents.get(p.id)?.isExternal) {
+      restoredIdsForCleanup.add(p.id);
+    }
+  }
+
+  if (restoredIdsForCleanup.size > 0) {
     setTimeout(() => {
-      for (const id of restoredTerminalIds) {
+      for (const id of restoredIdsForCleanup) {
         const agent = agents.get(id);
-        if (agent && !agent.isExternal && agent.linesProcessed === 0) {
+        // Only clean up if it's been at least 15 seconds since creation
+        if (
+          agent &&
+          !agent.isExternal &&
+          agent.linesProcessed === 0 &&
+          Date.now() - agent.createdAt > 15_000
+        ) {
           console.log(`[Pixel Agents] Removing restored terminal agent ${id}: no data received`);
           agent.terminalRef?.dispose();
           removeAgent(
@@ -419,7 +477,7 @@ export function restoreAgents(
           webview?.postMessage({ type: 'agentClosed', id });
         }
       }
-    }, 10_000); // 10 seconds grace period
+    }, 15_000); // Increased grace period to 15 seconds
   }
 
   // Advance counters past restored IDs
